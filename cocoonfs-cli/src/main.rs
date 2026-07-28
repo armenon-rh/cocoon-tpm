@@ -23,10 +23,8 @@ use tpm2_interface::TpmiAlgHash;
 use utils_async::sync_types;
 use utils_common::{fixed_vec::FixedVec, zeroize};
 
-mod std_sync_types;
-use std_sync_types::StdSyncTypes;
-mod std_file_nvblkdev;
-use std_file_nvblkdev::StdFileNvBlkDev;
+use cocoonfs_cli::std_sync_types::StdSyncTypes;
+use cocoonfs_cli::std_file_nvblkdev::StdFileNvBlkDev;
 
 use clap::{self, CommandFactory as _, Parser as _};
 use pollster::FutureExt as _;

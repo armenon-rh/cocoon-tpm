@@ -13,6 +13,10 @@ readme = "README.md"
 name = "cocoonfs"
 path = "src/main.rs"
 
+[lib]
+name = "cocoonfs_cli"
+path = "src/lib.rs"
+
 [features]
 default = ["aes", "camellia", "sha2", "sha3", "sm3", "sm4"]
 

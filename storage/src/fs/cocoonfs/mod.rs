@@ -122,7 +122,7 @@ impl convert::From<FormatError> for NvFsError {
 }
 
 pub use aux_fs_metadata::{AuxFsMetadata, AuxFsMetadataIter, AuxFsMetadataPushError, WriteAuxFsMetadataOfflineFuture};
-pub use fs::{CocoonFs, ReadAuxFsMetadataFuture, WriteAuxFsMetadataFuture};
+pub use fs::{CocoonFs, ReadAuxFsMetadataFuture, ReadFilesystemUpdateCounterFuture, WriteAuxFsMetadataFuture};
 pub use image_header::FsMetadataMkFsInfo;
 pub use layout::ImageLayout;
 pub use mkfs::{MkFsFuture, WriteMkFsInfoHeaderFuture};

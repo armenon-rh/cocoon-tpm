@@ -937,6 +937,31 @@ impl<ST: sync_types::SyncTypes, B: blkdev::NvBlkDev> CocoonFs<ST, B> {
     ) -> ReadAuxFsMetadataFuture<ST, B> {
         ReadAuxFsMetadataFuture::new(context)
     }
+
+    /// Read the filesystem's current update/generation counter.
+    ///
+    /// 16 raw bytes, a monotonic 128-bit counter (little-endian -- see
+    /// `transaction::write_journal`'s `u128::from_le_bytes`/`to_le_bytes` pair)
+    /// incremented once per committed transaction. Unlike [`AuxFsMetadata`],
+    /// the value lives directly in [`CocoonFsSyncState`] once decrypted at
+    /// open time (see `openfs`'s `OpenFsFuture`) and needs no further disk
+    /// I/O to read back, so this is a thin read-sequence-only future with no
+    /// second inner future, unlike [`read_aux_fs_metadata()`](Self::read_aux_fs_metadata).
+    ///
+    /// `read_filesystem_update_counter()` returns a
+    /// [future](ReadFilesystemUpdateCounterFuture), which must get
+    /// [polled](fs::NvFsFuture::poll) to obtain the value.
+    ///
+    /// # Arguments:
+    ///
+    /// * `this` - A [`SyncRcPtrRef<Self>`](sync_types::SyncRcPtrRef) referring
+    ///   to the [`SyncRcPtr<Self>`](sync_types::SyncRcPtr) managing the `NvFs`
+    ///   instance.
+    pub fn read_filesystem_update_counter(
+        _this: &<Self as fs::NvFs>::SyncRcPtrRef<'_>,
+    ) -> ReadFilesystemUpdateCounterFuture<ST, B> {
+        ReadFilesystemUpdateCounterFuture::new()
+    }
 }
 
 impl<ST: sync_types::SyncTypes, B: blkdev::NvBlkDev> fs::NvFs for CocoonFs<ST, B> {
@@ -2447,6 +2472,71 @@ impl<ST: sync_types::SyncTypes, B: blkdev::NvBlkDev> fs::NvFsFuture<CocoonFs<ST,
                 }
                 ReadAuxFsMetadataFutureState::Done => unreachable!(),
             }
+        }
+    }
+}
+
+/// Future returned by [`CocoonFs::read_filesystem_update_counter()`].
+pub struct ReadFilesystemUpdateCounterFuture<ST: sync_types::SyncTypes, B: blkdev::NvBlkDev> {
+    fut_state: ReadFilesystemUpdateCounterFutureState<ST, B>,
+}
+
+/// Internal [`ReadFilesystemUpdateCounterFuture`] state-machine state.
+enum ReadFilesystemUpdateCounterFutureState<ST: sync_types::SyncTypes, B: blkdev::NvBlkDev> {
+    StartReadSequence {
+        start_read_sequence_fut: StartReadSequenceFuture<ST, B>,
+    },
+    Done,
+}
+
+impl<ST: sync_types::SyncTypes, B: blkdev::NvBlkDev> ReadFilesystemUpdateCounterFuture<ST, B> {
+    fn new() -> Self {
+        Self {
+            fut_state: ReadFilesystemUpdateCounterFutureState::StartReadSequence {
+                start_read_sequence_fut: StartReadSequenceFuture::new(),
+            },
+        }
+    }
+}
+
+impl<ST: sync_types::SyncTypes, B: blkdev::NvBlkDev> fs::NvFsFuture<CocoonFs<ST, B>>
+    for ReadFilesystemUpdateCounterFuture<ST, B>
+{
+    /// Output type of [`poll()`](fs::NvFsFuture::poll).
+    ///
+    /// On success, the 16 raw bytes of the filesystem's current update
+    /// counter are returned wrapped in an `Ok`.
+    type Output = Result<[u8; image_header::FILESYSTEM_UPDATE_COUNTER_LEN as usize], NvFsError>;
+
+    fn poll(
+        self: pin::Pin<&mut Self>,
+        fs_instance: &CocoonFsSyncRcPtrRefType<ST, B>,
+        rng: &mut dyn rng::RngCoreDispatchable,
+        cx: &mut task::Context<'_>,
+    ) -> task::Poll<Self::Output> {
+        let this = pin::Pin::into_inner(self);
+
+        match &mut this.fut_state {
+            ReadFilesystemUpdateCounterFutureState::StartReadSequence {
+                start_read_sequence_fut,
+            } => match fs::NvFsFuture::poll(pin::Pin::new(start_read_sequence_fut), fs_instance, rng, cx) {
+                task::Poll::Ready(Ok(read_sequence)) => {
+                    this.fut_state = ReadFilesystemUpdateCounterFutureState::Done;
+                    let sync_state_read_guard = match read_sequence.continue_sequence::<ST, B>(fs_instance) {
+                        Ok(sync_state_read_guard) => sync_state_read_guard,
+                        Err(e) => return task::Poll::Ready(Err(e)),
+                    };
+                    let value = sync_state_read_guard.filesystem_update_counter.value;
+                    drop(sync_state_read_guard);
+                    task::Poll::Ready(Ok(value))
+                }
+                task::Poll::Ready(Err(e)) => {
+                    this.fut_state = ReadFilesystemUpdateCounterFutureState::Done;
+                    task::Poll::Ready(Err(e))
+                }
+                task::Poll::Pending => task::Poll::Pending,
+            },
+            ReadFilesystemUpdateCounterFutureState::Done => unreachable!(),
         }
     }
 }

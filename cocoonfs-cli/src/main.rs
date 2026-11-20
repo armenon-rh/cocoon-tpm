@@ -626,6 +626,24 @@ enum CliCommand {
 
     /// Remove a file from the filesystem image.
     RemoveFile(CliRemoveFile),
+
+    /// Print the filesystem's current update/generation counter (hex-encoded).
+    ///
+    /// Requires a full authenticated open with --key: the counter lives in the
+    /// encrypted filesystem state, authenticated as a side effect of verifying
+    /// the Authentication Tree Root HMAC at open time -- there is no keyless
+    /// path to it, unlike auxiliary filesystem metadata.
+    ShowUpdateCounter(CliShowUpdateCounterArgs),
+}
+
+#[derive(clap::Args)]
+struct CliShowUpdateCounterArgs {
+    #[command(flatten)]
+    key: CliKeySource,
+
+    /// Don't randomize unallocated storage regions.
+    #[arg(name = "no-randomize-unallocated", long, short = 'n')]
+    enable_trimming: bool,
 }
 
 #[derive(clap::Args)]
@@ -1760,6 +1778,33 @@ fn main() {
                     }
                 }
             };
+        }
+        CliCommand::ShowUpdateCounter(cli_show_update_counter_args) => {
+            let key = load_key(CliKeySourceRef::from(&cli_show_update_counter_args.key));
+
+            // If the volume file's block size is to be ignored, the it would be best to
+            // resort to using the IO block size recorded in the filesystem
+            // header. But that's not known as it currently stands, so use the
+            // minimum possible then.
+            let blkdev = open_blkdev(&cli.volume_file_path, cli.ignore_volume_file_io_block_size.then_some(0));
+            let (fs_instance, rng) = open_filesystem(blkdev, &key, cli_show_update_counter_args.enable_trimming);
+
+            let counter = match NvFsFutureAsCoreFuture::new(
+                fs_instance.clone(),
+                CocoonFsType::read_filesystem_update_counter(&cocoonfs_mk_fs_instance_ref(&fs_instance)),
+                rng,
+            )
+            .block_on()
+            {
+                Ok((_rng, Ok(counter))) => counter,
+                Ok((_, Err(e))) | Err(e) => {
+                    eprintln!("error: failed to read CocoonFs filesystem update counter: error={e:?}");
+                    std::process::exit(6);
+                }
+            };
+
+            let hex_counter: String = counter.iter().map(|b| format!("{b:02x}")).collect();
+            println!("{hex_counter}");
         }
         CliCommand::ListFiles(cli_list_files_args) => {
             let key = load_key(CliKeySourceRef::from(&cli_list_files_args.key));
